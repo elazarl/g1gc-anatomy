@@ -6,6 +6,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "G1GC",
+      editLink: {
+        baseUrl: "https://github.com/elazarl/g1gc-anatomy/edit/master/",
+      },
       social: {
         github: "https://github.com/elazarl/g1gc-anatomy",
       },
