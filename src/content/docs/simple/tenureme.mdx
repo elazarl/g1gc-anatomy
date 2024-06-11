@@ -1,0 +1,68 @@
+---
+title: 'Reliably Tenuring to the Old Gen'
+description: 'In previous page we saw that premature tenuring caused by PLAB'
+pubDate: 'May 25 2024'
+sidebar:
+  order: 4
+---
+# Reliable Tenuring of Objects
+## Premature Tenuring by PLAB
+
+We've seen that many objects were tenured without surviving
+`MaxTenuringThreshold` rounds of GC. We need to prevent that
+to have a way of creating known amount of oldgen.
+
+The gist of the problem was, we exhausted the PLAB, the thread
+local buffer that is used to copy survivors of young generation 
+to the next region.
+
+If we run out of milk, we pick some more milk from the grocery stores.
+But what do we do if we run out of PLABs?
+
+Every thread has its own PLAB, so with more threads, we'll get more
+PLABs:
+
+```java
+import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class ProvokeGC {
+  public static void alloc() { byte[] _unused = new byte[512]; }
+  public static void provoke() {
+    int nplabs = 10;
+    ArrayList<ExecutorService> svcs = new ArrayList<>(nplabs);
+    for (int i = 0; i < nplabs; i++) {
+      svcs.add(Executors.newSingleThreadExecutor());
+    }
+    Runtime rt = Runtime.getRuntime();
+    long freeBytes = rt.freeMemory();
+    int svc_ix = 0;
+    while (true) {
+      svcs.get(svc_ix).execute(() -> {
+        alloc();
+      });
+      svc_ix = (svc_ix+1) % nplabs;
+
+      long curFree = rt.freeMemory();
+      // if this NOP made less memory we've had GC
+      if (freeBytes < curFree)
+        break;
+      freeBytes = curFree;
+    }
+    for (ExecutorService svc : svcs) {
+      svc.shutdown();
+    }
+  }
+
+  public static void main(String[] args) {
+    int times = 1;
+    if (args.length == 1)
+      times = Integer.parseInt(args[0]);
+    for (int i=0;i<times;i++)
+      provoke();
+  }
+}
+
+```
+

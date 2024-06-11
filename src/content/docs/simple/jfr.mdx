@@ -1,0 +1,266 @@
+---
+title: 'Java Flight Recorder'
+description: 'How to read GC events with JFR'
+pubDate: 'May 25 2024'
+sidebar:
+  order: 2
+---
+# Introduction
+
+## Motivation
+
+As we delve into the GC implmentation we need more information about GC related events.
+
+Various JVM flags can get us so far, but a way which can provide most details, and
+is portable through JDK versions is the
+[Java Flight Recorder](https://developers.redhat.com/blog/2020/08/25/get-started-with-jdk-flight-recorder-in-openjdk-8u).
+
+Note that while JFR used to be commercial feature, it seems like [it is no longer the case](https://openjdk.org/jeps/328).
+
+## Advantages Over Logging
+
+We get free timestamp for any event, we log everything efficiently to memory, and, we can add custom JFR events
+for our own application.
+
+# A Simple JFR Reader
+
+## JVM command line
+
+### Default profiles
+
+The easiest way to get started with JFR, is to run a simple application with a predefined JFR _settings_.
+The JFR _profile_ builtin setting will simply define which events will be tracked.
+
+Let's use the [YoungGCProvoker](/simple/young) program as an example:
+
+```bash
+❯ javac *.java; java -XX:+UseG1GC \
+  -XX:StartFlightRecording=dumponexit=true,settings=profile,filename=dump.jfr \
+  -cp . ProvokeYoungGC
+[0.251s][info][jfr,startup] Started recording 1. No limit specified, using maxsize=250MB as default.
+[0.251s][info][jfr,startup]
+[0.251s][info][jfr,startup] Use jcmd 94055 JFR.dump name=1 filename=FILEPATH to copy recording data to file.
+```
+
+Unless `filename=dump.jfr` option was added, a file named `hotspot-pid-<PID>-id-<ID>-<DATE>.jfr` will be created.
+
+### The JFR Command Line
+
+Let's print all garbage collections that occured
+
+```bash
+❯ jfr print --events jdk.GarbageCollection dump.jfr
+jdk.GarbageCollection {
+  startTime = 00:54:00.296 (2024-06-02)
+  duration = 2.16 ms
+  gcId = 0
+  name = "G1New"
+  cause = "G1 Evacuation Pause"
+  sumOfPauses = 2.16 ms
+  longestPause = 2.16 ms
+  eventThread = "VM Thread" (osThreadId = 18435)
+}
+```
+
+Indeed we've had just one GC event as we expected.
+
+Let's print some more details
+
+```bash
+❯ jfr print --events jdk.\*GarbageCollection dump.jfr
+jdk.GarbageCollection {
+  startTime = 00:57:57.598 (2024-06-02)
+  duration = 2.19 ms
+  gcId = 0
+  name = "G1New"
+  cause = "G1 Evacuation Pause"
+  sumOfPauses = 2.19 ms
+  longestPause = 2.19 ms
+  eventThread = "VM Thread" (osThreadId = 19459)
+}
+
+jdk.YoungGarbageCollection {
+  startTime = 00:57:57.598 (2024-06-02)
+  duration = 2.19 ms
+  gcId = 0
+  tenuringThreshold = 15
+}
+
+jdk.G1GarbageCollection {
+  startTime = 00:57:57.598 (2024-06-02)
+  duration = 2.19 ms
+  gcId = 0
+  type = "Normal"
+}
+```
+
+So we can see that `gcId=0` was a young GC collection, and the tenuring threshold was `15`.
+That is, an object need to survive 15 rounds of GC in order to be tenured to the old generation.
+
+## Custom Configuration
+
+While the default configurations for the JFR are pretty solid, we need a way to enable
+events, even those that are not in the default profile.
+
+Let's write a small Java program that would grab the default profile, and turn
+on and off events to our liking.
+
+### Usage Example
+
+Usage example that creates thin configuration:
+
+```bash
+❯ # create a JavaFlightRecord configuration with only G1 events enabled
+❯ javac *.java && java -cp . JFRConfig -c G1
+
+❯ # Indeed thye're enabled
+❯ rg -A3 HeapSummary
+conf.jfc
+266:    <event name="jdk.GCHeapSummary">
+267-      <setting control="gc-enabled-normal" name="enabled">false</setting>
+268-    </event>
+269-
+270:    <event name="jdk.PSHeapSummary">
+271-      <setting control="gc-enabled-normal" name="enabled">false</setting>
+272-    </event>
+273-
+274:    <event name="jdk.G1HeapSummary">
+275-      <setting control="gc-enabled-normal" name="enabled">true</setting>
+276-    </event>
+277-
+
+❯ java -XX:+UseG1GC -XX:StartFlightRecording=dumponexit=true,settings=conf.jfc,filename=dump.jfr \
+       -cp . ProvokeYoungGC
+Started recording 1. No limit specified, using maxsize=250MB as default.
+
+Use jcmd 8284 JFR.dump name=1 to copy recording data to file.
+
+❯ jfr print dump.jfr|head
+jdk.G1HeapRegionInformation {
+  startTime = 12:41:06.859
+  index = 0
+  type = "Free"
+  start = 0x300800000
+  used = 0 bytes
+}
+
+❯ jfr print --events G1HeapRegionTypeChange dump.jfr
+jdk.G1HeapRegionTypeChange {
+  startTime = 12:41:06.861
+  index = 377
+  from = "Free"
+  to = "Eden"
+  start = 0x35EC00000
+  used = 0 bytes
+}
+```
+
+Note the G1HeapRegionTypeChange event, which is not enabled by default, even in the profile settings.
+
+This could be useful at times.
+
+### The Code Used
+
+As we use XML which is a bit dated, the code is a bit noisy, but it suits our purpose of
+easily setting custom events.
+
+```java
+import jdk.jfr.Configuration;
+import org.w3c.dom.*;
+
+import javax.xml.*;
+import javax.xml.parsers.*;
+import javax.xml.transform.*;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.*;
+
+public class JFRConfig {
+
+  public static void main(String[] args) throws Exception {
+    List<String> options = new ArrayList<>(Arrays.asList(args));
+    boolean clear = args.length > 0 && args[0].equals("-c");
+    if (clear)
+      options.remove(0);
+    Configuration conf = Configuration.getConfiguration("profile");
+    String xml = conf.getContents();
+
+    Document document = getXmlDoc(xml);
+
+    enableEvents(document, clear, options);
+    write_xml(document, new File("conf.jfc"));
+  }
+
+  private static Document getXmlDoc(String xml) throws Exception {
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+    DocumentBuilder builder = dbf.newDocumentBuilder();
+    byte[] xml_bytes = xml.getBytes(StandardCharsets.UTF_8);
+    ByteArrayInputStream xml_is = new ByteArrayInputStream(xml_bytes);
+    return builder.parse(xml_is);
+  }
+
+  private static void enableEvents(Document document,
+                                   boolean clear,
+                                   List<String> confs) {
+    NodeList events = document.getElementsByTagName("event");
+    for (int i = 0; i < events.getLength(); i++) {
+      Node event = events.item(i);
+      String eventName = event.getAttributes().
+                               getNamedItem("name").
+                               getTextContent();
+      Optional<String> result = Optional.empty();
+      if (clear)
+        result = Optional.of("false");
+      if (confs.stream().anyMatch(eventName::contains))
+        result = Optional.of("true");
+      NodeList settings = event.getChildNodes();
+      if (!result.isPresent())
+        continue;
+      setEnabledAttr(settings, result.get());
+    }
+  }
+
+  private static void setEnabledAttr(NodeList settings, String result) {
+    for (int j = 0; j < settings.getLength(); j++) {
+      Node setting = settings.item(j);
+      if (setting.getNodeType() != Node.ELEMENT_NODE)
+        continue;
+      Node name_attr = setting.getAttributes().getNamedItem("name");
+      if (name_attr.getNodeValue().equals("enabled"))
+        setting.setTextContent(result);
+    }
+  }
+
+  private static void write_xml(Document doc, File path) throws Exception {
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty(OutputKeys.METHOD, "xml");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "4");
+
+    try (OutputStream out = Files.newOutputStream(path.toPath())) {
+      DOMSource source = new DOMSource(doc);
+      StreamResult result = new StreamResult(out);
+
+      tf.transform(source, result);
+    }
+  }
+}
+```
+
+
+### Settings location
+
+Just for the record, JFR settings are usually `default` and `profile`.
+They're located in `$JAVA_HOME/jre/lib/jfr`
+
+In case you don't have `JAVA_HOME` set, you can get `$JAVA_HOME/jre` with:
+
+```bash
+❯ java -XshowSettings:properties -version|&sed -n '/java.home/s/^.*= //p'
+```
+
+See example of using this class in [oldgen failed experiments](/simple/oldgen-failed).

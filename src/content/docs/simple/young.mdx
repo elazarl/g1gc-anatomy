@@ -1,0 +1,182 @@
+---
+title: 'Young GC in G1'
+description: 'We will make G1 collect the young generation'
+pubDate: 'May 25 2024'
+sidebar:
+  order: 1
+---
+# G1 Young Collection
+
+## G1 101
+
+### Basic Inexact GC Model
+
+Reading about the G1 GC, in [various](https://youtu.be/9FiNsALl64k) [places](https://www.redhat.com/en/blog/collecting-and-reading-g1-garbage-collector-logs-part-1)
+Gives the following hight level, inaccurate, picture:
+
+- Memory is divided to _regions_
+- Regions are divided to Eden and Eldery space
+- Mutator, the program at hand that _produces_ the garbage runs, and allocates
+- At each allocation point, we fill the Eden space, if that is done _Evacuation Stop_ happens.
+
+The _evacuation_ can be:
+
+- Young collection, which can be supplemented by concurrent-mark
+- Mixed, young and oldgen collection, if heap is full enough
+- Full GC, which is done if memory pressure is high and we might be unable to allocate.
+
+While these gloss over many things, such as humongous execution, it seems accurate enough.
+
+Let's take a bite and try to see that in action.
+
+## Provoking Young Collection
+
+### G1 Visibility
+
+The simplest metric we want to see from within a Java program, is how full the heap is.
+
+We need no flags for that:
+
+```java
+public class AssertAllocVisible {
+  public static void main() {
+    Runtime rt = Runtime.getRuntime();
+    long before = rt.freeMemory();
+    byte[] b = new byte[100 * 1024];
+    assert before < rt.freeMemory();
+  }
+}
+```
+
+### Young GC Provoker
+
+From that, we can build a primitive that would force an _evacation casue_.
+We'll simply allocate and throw away until memory is reduced.
+
+This technique might cause more than one GC cycle, but would stop after the first successful one:
+
+```java
+public class ProvokeYoungGC {
+  public static void provoke() {
+    Runtime rt = Runtime.getRuntime();
+    long freeBytes = rt.freeMemory();
+    while (true) {
+      byte[] bytes = new byte[512];
+      long curFree = rt.freeMemory();
+      // if this NOP made less memory we've had GC
+      if (freeBytes < curFree)
+        break;
+      freeBytes = curFree;
+    }
+  }
+
+  public static void main(String[] args) {
+    int n = 0;
+    if (args.length > 0)
+      n = Integer.parseInt(args[0]);
+    for (int i=0;i<n;i++)
+      provoke();
+  }
+}
+```
+
+#### Testing it
+
+How can we see that it worked? The easiest way to install
+JDK this days is [SDKMAN!](https://sdkman.io/), we'll use both ends of the
+JDK spectrum, JDK-8, which is stil used, and JDK-22, latest release.
+
+##### JDK 8
+
+```bash
+sdk install java 8.0.402-amzn
+sdk i java 22-tem
+
+❯ sdk u java 8.0.402-amzn
+
+Using java version 8.0.402-amzn in this shell.
+❯ javac ProvokeYoungGC.java
+
+❯ java -Xmx10M -verbose:gc -cp . ProvokeYoungGC
+[GC (Allocation Failure)  4096K->496K(15872K), 0.0004601 secs]
+````
+
+Magnificent. We did provoke one GC. But which is it?
+
+##### JDK 22
+
+Let's try latest java for a change
+
+```bash
+❯ sdk u java 22-tem
+
+Using java version 22-tem in this shell.
+
+❯ javac ProvokeYoungGC.java
+
+❯ java -Xmx10M -verbose:gc -cp . ProvokeYoungGC
+[0.005s][info][gc] Using G1
+[0.040s][info][gc] GC(0) Pause Young (Normal) (G1 Evacuation Pause) 8M->0M(16M) 0.468ms
+```
+
+Indeed, a young collection, using the G1 GC.
+
+##### JDK 22 multiple rounds
+
+Let's go crazy now, and try running 100 young gc
+
+```bash
+❯ javac ProvokeYoungGC.java
+
+❯ java -verbose:gc -cp . ProvokeYoungGC 10
+[0.003s][info][gc] Using G1
+^C
+```
+
+Hey! It's stuck. How can it possibly be?
+
+We allocate some bytes every loop iteration, and yet no GC occur.
+
+#### Avoid JIT optimizations
+
+The reason is newer `JVM`s offer
+[escape analysis](https://blogs.oracle.com/javamagazine/post/escape-analysis-in-the-hotspot-jit-compiler)
+that would allocate those bytes on the stack. To prevent that, we can use
+`-XX:CompileCommand=exclude,Promoting.provoke`.
+
+How can we see that indeed this is the case? First we can see this method is indeed JIT'd
+
+```bash
+❯ java -XX:+PrintCompilation -verbose:gc -cp . ProvokeYoungGC
+[0.003s][info][gc] Using G1
+20    1       3       java.lang.Object::<init> (1 bytes)
+...
+43   66 %     3       ProvokeYoungGC::provoke @ 9 (38 bytes)
+43   67       3       ProvokeYoungGC::provoke (38 bytes)
+49   68 %     4       ProvokeYoungGC::provoke @ 9 (38 bytes)
+50   66 %     3       ProvokeYoungGC::provoke @ 9 (38 bytes)   made not entrant
+```
+
+The `%` means an [OSR](https://thangavel-blog.medium.com/java-on-stack-replacement-osr-b527ab3fff8c)
+occured, and the rightmost `3` and `4` are the
+[compilation level](https://javarush.com/en/groups/posts/en.2256.compiling-and-running-java-applications-under-the-hood#Just-in-time-(JIT)-%D0%BA%D0%BE%D0%BC%D0%BF%D0%B8%D0%BB%D1%8F%D1%86%D0%B8%D1%8F).
+See [the implementation](https://github.com/openjdk/jdk/blob/jdk-23%2B25/src/hotspot/share/compiler/compileTask.cpp#L249)
+for more details.
+
+
+What can we do about it?
+
+```bash
+❯ java -XX:CompileCommand=exclude,ProvokeYoungGC.provoke -verbose:gc -cp . ProvokeYoungGC 10
+[0.002s][info][gc] Using G1
+CompileCommand: exclude ProvokeYoungGC.provoke bool exclude = true
+[0.051s][info][gc] GC(0) Pause Young (Normal) (G1 Evacuation Pause) 64M->0M(1536M) 0.963ms
+```
+
+## Summary
+
+Allocating enough objects would provoke a GC, and first GCs would be _young_ collections.
+
+An easy way to detect GCs is adding `-verbose:gc` which is pretty portable across JDK versions.
+
+[Next article](/simple/jfr) would show other ways to gain visibility about GCs.

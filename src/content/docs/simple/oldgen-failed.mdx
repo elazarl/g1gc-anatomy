@@ -1,0 +1,217 @@
+---
+title: 'Tenuring Objects to the Old Gen'
+description: 'We will try to tenure objects to the old age, and see how to read VmOptions'
+pubDate: 'May 25 2024'
+sidebar:
+  order: 3
+---
+
+# Making Old Generation
+
+With a primitive that provokes young GC in our hand, let's create an old generation.
+
+How? Create enough GC until the generation is old enough
+
+## JVM command line
+
+But how old is "old enough". To find that out we need the `-XX:MaxTenuringThreshold=`
+command line option.
+
+Let's write a short class that would enable us to easily receive every command line option
+of our virtual machine.
+
+
+```java
+import com.sun.management.HotSpotDiagnosticMXBean;
+
+import javax.management.MBeanServer;
+import java.io.IOException;
+import java.lang.management.ManagementFactory;
+
+public class GetVmOptions {
+  static MBeanServer mbs =
+       ManagementFactory.getPlatformMBeanServer();
+  static HotSpotDiagnosticMXBean mbean;
+
+  static {
+    try {
+      mbean = ManagementFactory.newPlatformMXBeanProxy(mbs,
+          "com.sun.management:type=HotSpotDiagnostic",
+          HotSpotDiagnosticMXBean.class);
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public static int get(String key) {
+    String value = mbean.getVMOption(key).getValue();
+    return Integer.valueOf(value);
+  }
+  
+  public static void main(String[] args) throws IOException {
+    System.out.println("will tenure after = " +
+                       get("MaxTenuringThreshold"));
+  }
+}
+```
+
+Let's run that:
+
+```bash
+❯ javac *.java
+❯ java -cp . GetVmOptions
+will tenure after = 15
+```
+
+By default we need 15 rounds of GC until object is promoted to the eldery zone.
+
+## Promotion
+
+Let's go ahead and promote some objects to be oldgen!
+
+```java
+public class MakeOldgen {
+  static class Eldery {
+    public byte weight[] = new byte[512];
+    public Eldery next;
+  }
+  public static void main(String[] args) {
+    int tenuring_off = 1;
+    if (args.length >= 1) {
+      tenuring_off = Integer.valueOf(args[0]);
+    }
+    Runtime rt = Runtime.getRuntime();
+    long baseline = rt.freeMemory();
+    long MB = 1024*1024;
+    int tenuring_thres =
+       GetVmOptions.get("MaxTenuringThreshold");
+    System.out.println("Objs tenure after surviving " +
+                      tenuring_thres +
+                      " rounds of GC. Running " +
+                      (tenuring_thres+tenuring_off) +
+                      " rounds");
+    Eldery oldgen = makeOldgen(40);
+    System.out.println("Heap: Promoting 20MB oldgen");
+    for (int i = 0;
+       i < tenuring_thres+tenuring_off;
+       i++) {
+      ProvokeYoungGC.provoke();
+    }
+    System.out.println("Heap: Now running GC after promotion");
+    oldgen = null;
+    ProvokeYoungGC.provoke();
+    System.out.println("Heap: Now done");
+  }
+
+  private static Eldery makeOldgen(int mb) {
+    Eldery oldgen = null;
+    // each Eldery object has 512 bytes, we'll allocate 2*1024
+    // of those to take up 1 MB
+    for (int i = 0; i < mb * 1024 * 2; i++) {
+      Eldery newold = new Eldery();
+      newold.next = oldgen;
+      oldgen = newold;
+    }
+    return oldgen;
+  }
+}
+```
+
+What we're doing here is:
+
+  1. Allocating 20MB of small objects
+  2. Provoking young GC 15 times (configurable by command line)
+  3. We expect many objects to be promoted to the old generation.
+  4. Hence additional young GC would not affect the old generation
+     and memory consumption would remain similar.
+
+## Promotion Visibility
+
+Did that work? We've already learned of [JFR](/simple/jfr), so let's use
+just that to find out! We'll enable all events with "Promot" in
+the name, to inspect promotion related events.
+
+```bash
+❯ javac *.java && java -cp . JFRConfig -c Promot
+
+❯ java \
+  -XX:StartFlightRecording=dumponexit=true,settings=conf.jfc,filename=dump.jfr \
+  -XX:+UseG1GC -cp . MakeOldgen
+Started recording 1. No limit specified, using maxsize=250MB as default.
+
+Use jcmd 12634 JFR.dump name=1 to copy recording data to file.
+Objs tenure after surviving 15 rounds of GC. Running 16 rounds
+Heap: Promoting 20MB oldgen
+Heap: Now running GC after promotion
+Heap: Now done
+
+❯ jfr print dump.jfr|head
+jdk.PromoteObjectInNewPLAB {
+  startTime = 12:57:54.086
+  gcId = 0
+  objectClass = java.lang.Object[] (classLoader = <bootloader>)
+  objectSize = 3 bytes
+  tenuringAge = 0
+  tenured = false
+  plabSize = 4.0 kB
+  eventThread = "Gang worker#0 (Parallel GC Threads)" (osThreadId = 9475)
+}
+```
+
+So we see an array being allocated, and _not_ being promoted, note `tenured=false`.
+
+Where is the first time an object is promoted?
+
+```bash
+❯ jfr print dump.jfr|rg -C6 tenured.=.true|head
+jdk.PromoteObjectInNewPLAB {
+  startTime = 12:57:54.093
+  gcId = 0
+  objectClass = byte[] (classLoader = <bootloader>)
+  objectSize = 66 bytes
+  tenuringAge = 0
+  tenured = true
+  plabSize = 1.0 kB
+  eventThread = "Gang worker#0 (Parallel GC Threads)" (osThreadId = 9475)
+}
+```
+
+Wait, what? How come this object is tenured, however unlike what we said, the
+`tenuringAge`
+
+The test did _not_ work, object were promoted, but not because enought generation passed!
+
+## What is PLAB?
+
+To make a long story short, each thread in JVM has Promotion Local Allocation Buffer, or PLAB.
+It is a piece of memory allocated from a G1 Region, which it uses to allocate new objects.
+
+When we try to GC young region, we do that with multiple thread, and [each threads copy
+the object it collects](https://github.com/AdoptOpenJDK/openjdk-jdk8u/blob/master/hotspot/src/share/vm/gc_implementation/g1/g1ParScanThreadState.cpp#L216-L236)
+from the young region to its local PLAB buffer.
+
+An `oop` is an _ordinary object pointer_ which we copy to survivor space:
+
+```c++
+oop G1ParScanThreadState::copy_to_survivor_space(InCSetState const state,
+                                                 oop const old,
+                                                 markOop const old_mark)
+...
+// we try to allocate space for the oop in our PLAB
+HeapWord* obj_ptr = _g1_par_allocator->plab_allocate(dest_state, word_sz, context);
+if (obj_ptr == NULL) {
+  // if space in PLAB is gone, try to allocate in region a new region
+  obj_ptr = _g1_par_allocator->allocate_direct_or_new_plab(dest_state, word_sz, context);
+  if (obj_ptr == NULL) {
+    // if no young regions could be found - just allocate an old one
+    obj_ptr = allocate_in_next_plab(state, &dest_state, word_sz, context);
+```
+
+So, what we said is inexact, when one thread exausts its young generation space,
+it would allocate from old generation instead, and would not promote the objects as
+intended.
+
+We need to find a way to make sure objects are indeed promoted due to tenureship,
+and then see their `tenureAge` is indeed 15.
+
+But how? See in [tenureme page](/simple/tenureme)

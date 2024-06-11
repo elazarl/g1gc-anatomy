@@ -1,0 +1,29 @@
+---
+title: 'G1GC Introduction'
+description: 'Anatomy of the Garbage-fist Collector through examples'
+template: splash
+hero:
+  tagline: Garbage-first by Examples
+  image:
+    file: ../../assets/houston.webp
+  actions:
+    - text: Provoking Young GC
+      link: /simple/young
+      icon: right-arrow
+      variant: primary
+---
+
+**Garbage First**
+
+This small website would describe the inner working of the
+[G1 Garbage Collector](https://en.wikipedia.org/wiki/Garbage-first_collector)
+by building small examples that excersize its various mechanism.
+
+We start by [forcing a young collection](/simple/young).
+
+We detour to a short intro to [Java Flight Recorder](/simple/jfr) to gain visibility to the GC.
+
+We'll show a naive failed approach to [promote objects into the old generation](/simple/oldgen-failed).
+
+Then improve to PLAB-abundant version of the [oldgen-generator](/simple/tenureme).
+
