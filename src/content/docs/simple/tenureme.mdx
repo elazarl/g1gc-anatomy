@@ -3,6 +3,7 @@ title: 'Reliably Tenuring to the Old Gen'
 description: 'In previous page we saw that premature tenuring caused by PLAB'
 pubDate: 'May 25 2024'
 sidebar:
+  label: Tenuring to Old Gen
   order: 4
 ---
 # Reliable Tenuring of Objects
@@ -63,6 +64,41 @@ public class ProvokeGC {
       provoke();
   }
 }
+```
+
+Let's see how it works
+
+```bash
+❯ javac *.java && java -cp . JFRConfig Promot # With promotion events
+❯ javac *.java && java \
+  -XX:StartFlightRecording=dumponexit=true,settings=conf.jfc,filename=dump.jfr \
+  -XX:CompileCommand=exclude,ProvokeGC.alloc \
+  -XX:+UseG1GC -Xmx100M -cp . ProvokeGC
+❯ jfr print --events '*Promo*' dump.jfr|rg tenured.=.true|wc -l
+       0
+
+❯ jfr print --events '*Promo*' dump.jfr|rg tenured.=.false|wc -l
+      86
 
 ```
 
+No promotions at all! On some runs there could be some promotions from the bootloader
+when the Java bootloader ran out of PLABs, but those are of overall reasonable size.
+
+We can see that indeed we have a large amount of object with `age == 1`:
+
+```bash
+❯ jfr print --json --events Ten\* dump.jfr | \
+  jq '.recording.events[]|select(.values.size > 0)'
+{
+  "type": "jdk.TenuringDistribution",
+  "values": {
+    "startTime": "2024-06-18T12:11:13.023725125+03:00",
+    "gcId": 0,
+    "age": 1,
+    "size": 2859648
+  }
+}
+```
+
+Let's write a class that generates old age with a certain size:
