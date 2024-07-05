@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <!--meta name="viewport" content="width=device-width, initial-scale=1.0"-->
+    <!--meta http-equiv="X-UA-Compatible" content="ie=edge"-->
+    <title>Graphs</title>
+  </head>
+  <body>
+    <div>
+	    <div id="plotly-html-element" class="plotly-graph-div" style="height:50%; width:100%;"></div>
+	    <div id="plotly-html-element2" class="plotly-graph-div" style="height:50%; width:100%;"></div>
+	    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+      <!--script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script-->
+      <script src="https://cdn.plot.ly/plotly-2.12.1.min.js"></script>
+      <script type="module">
+const graphdivs = document.getElementsByClassName('plotly-graph-div');
+const resp = await fetch('/ages');
+const data = await resp.json();
+
+await Plotly.newPlot( graphdivs[0], data[0] );
+await Plotly.newPlot( graphdivs[1], data[1] );
+
+      </script>
+    </div>
+    
+  </body>
+</html>
