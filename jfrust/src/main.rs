@@ -169,6 +169,8 @@ async fn main() {
     let app = Router::new()
         .route("/ages", get(ages))
         .route("/", get(index))
+        .route("/plotly-2.32.0.min.js", get(plotlyjs))
+        .route("/tex-svg.js", get(tex))
         .with_state(graphs);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -190,4 +192,10 @@ async fn ages(State(graphs): State<Graphs>) -> Json<Vec<Plot>> {
 
 async fn index(State(_state): State<Graphs>) -> Html<&'static str> {
     Html(include_str!("../assets/index.html"))
+}
+async fn plotlyjs(State(_state): State<Graphs>) -> Html<&'static str> {
+    Html(include_str!("../assets/plotly-2.32.0.min.js"))
+}
+async fn tex(State(_state): State<Graphs>) -> Html<&'static str> {
+    Html(include_str!("../assets/tex-svg.js"))
 }
