@@ -173,6 +173,37 @@ pub struct G1HeapSummary {
     #[serde(rename = "survivorUsedSize")]
     pub survivor_used: u64,
 }
+/*
+"type": "jdk.G1GarbageCollection",
+"values": {
+  "startTime": "2024-07-05T13:49:17.514902791+03:00",
+  "duration": "PT0.002919334S",
+  "gcId": 2,
+  "type": "Normal"
+}
+*/
+#[derive(Deserialize, Debug, Clone, Copy, Default)]
+pub enum CollectionType {
+    Normal,
+    #[serde(rename = "Prepare Mixed")]
+    PrepareMixed,
+    #[serde(rename = "Concurrent Start")]
+    ConcurrentStart,
+    Mixed,
+    #[serde(other)]
+    #[default]
+    Unknown,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct G1GarbageCollection {
+    #[serde(deserialize_with = "deser_ts_ms")]
+    pub start_time: DateTime<Utc>,
+    pub gc_id: u64,
+    #[serde(rename = "type")]
+    pub type_: CollectionType,
+}
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum JfrEvent {
@@ -182,6 +213,8 @@ pub enum JfrEvent {
     GCHeapSummary { values: GCHeapSummary },
     #[serde(rename = "jdk.G1HeapSummary")]
     G1HeapSummary { values: G1HeapSummary },
+    #[serde(rename = "jdk.G1GarbageCollection")]
+    G1GarbageCollection { values: G1GarbageCollection },
     #[serde(rename = "jdk.PromoteObjectOutsidePLAB")]
     PromoteObjectOutsidePLAB { values: PromoteObjectOutsidePLAB },
     #[serde(rename = "jdk.PromoteObjectInNewPLAB")]
@@ -198,6 +231,7 @@ impl JfrEvent {
             JfrEvent::G1HeapSummary { values } => Some(values.gc_id),
             JfrEvent::PromoteObjectOutsidePLAB { values } => Some(values.gc_id),
             JfrEvent::PromoteObjectInNewPLAB { values } => Some(values.gc_id),
+            JfrEvent::G1GarbageCollection { values } => Some(values.gc_id),
             JfrEvent::Unkown => None,
         }
     }
@@ -213,6 +247,7 @@ where
         .map_err(|e| serde::de::Error::custom(e.to_string()))
 }
 
+#[allow(unused)]
 fn deser_dur_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
     D: Deserializer<'de>,
