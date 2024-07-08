@@ -182,7 +182,7 @@ pub struct G1HeapSummary {
   "type": "Normal"
 }
 */
-#[derive(Deserialize, Debug, Clone, Copy, Default)]
+#[derive(Deserialize, Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub enum CollectionType {
     Normal,
     #[serde(rename = "Prepare Mixed")]

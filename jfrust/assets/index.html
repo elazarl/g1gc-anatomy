@@ -9,19 +9,34 @@
   <body>
     <div>
 	    <div id="plotly-html-element" class="plotly-graph-div" style="height:50%; width:100%;"></div>
+	    <input id="filter-checkbox" checked type="checkbox">Pause Only</input>
 	    <div id="plotly-html-element2" class="plotly-graph-div" style="height:50%; width:100%;"></div>
 	    <script src="/tex-svg.js"></script>
       <script src="/plotly-2.32.0.min.js" charset="utf-8"></script>
       <script type="module">
+let filter = document.getElementById("filter-checkbox");
 const graphdivs = document.getElementsByClassName('plotly-graph-div');
+filter.addEventListener('change', async e => {
+  let params = "?collection_type_filter=Unknown"+
+               "&collection_type_filter=Concurrent%20Start"+
+               "&collection_type_filter=Prepare%20Mixed"
+  ;
+  if (!e.target.checked)
+    params = '';
+  const resp = await fetch('/ages'+params);
+  const data = await resp.json();
+  let ticktext = data[1].layout.xaxis.ticktext;
+  await Plotly.newPlot( graphdivs[1], data[1] );
+});
+filter.dispatchEvent(new Event("change"));
 const resp = await fetch('/ages');
 const data = await resp.json();
 
 await Plotly.newPlot( graphdivs[0], data[0] );
-await Plotly.newPlot( graphdivs[1], data[1] );
+//await Plotly.newPlot( graphdivs[1], data[1] );
 
       </script>
     </div>
-    
+
   </body>
 </html>
