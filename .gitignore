@@ -19,3 +19,11 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# rust
+jfrust/target
+extract
+
+# convinience
+code
+.netlify
