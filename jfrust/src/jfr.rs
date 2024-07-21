@@ -242,6 +242,44 @@ pub struct GarbageCollection {
     #[serde(rename = "longestPause", deserialize_with = "deser_dur")]
     pub longest_pauses: Duration,
 }
+/*
+{
+  "type": "jdk.GCPhasePause",
+  "values": {
+    "startTime": "2024-07-21T14:02:03.138233875+03:00",
+    "duration": "PT0.000017041S",
+    "eventThread": {
+      "osName": "G1 Main Marker",
+      "osThreadId": 14595,
+      "javaName": null,
+      "javaThreadId": 0,
+      "group": null,
+      "virtual": false
+    },
+    "gcId": 24,
+    "name": "Pause Cleanup"
+  }
+},
+*/
+#[derive(Deserialize, Debug, Clone)]
+pub struct EventThread {
+    #[serde(rename = "osName")]
+    pub os_name: String,
+    #[serde(rename = "osThreadId")]
+    pub os_thread_id: u64,
+}
+#[derive(Deserialize, Debug, Clone)]
+pub struct GCPhasePause {
+    #[serde(rename = "startTime", deserialize_with = "deser_ts_ms")]
+    pub start_time: DateTime<Utc>,
+    #[serde(deserialize_with = "deser_dur")]
+    pub duration: Duration,
+    #[serde(rename = "eventThread")]
+    pub event_thread: EventThread,
+    #[serde(rename = "gcId")]
+    pub gc_id: u64,
+    pub name: String,
+}
 
 /*
 "type": "jdk.G1GarbageCollection",
@@ -289,6 +327,8 @@ pub enum JfrEvent {
     GarbageCollection { values: GarbageCollection },
     #[serde(rename = "jdk.OldGarbageCollection")]
     OldGarbageCollection { values: OldGarbageCollection },
+    #[serde(rename = "jdk.GCPhasePause")]
+    GCPhasePause { values: GCPhasePause },
     #[serde(rename = "jdk.YoungGarbageCollection")]
     YoungGarbageCollection { values: YoungGarbageCollection },
     #[serde(rename = "jdk.PromoteObjectOutsidePLAB")]
@@ -311,6 +351,7 @@ impl JfrEvent {
             JfrEvent::GarbageCollection { values } => Some(values.gc_id),
             JfrEvent::OldGarbageCollection { values } => Some(values.gc_id),
             JfrEvent::YoungGarbageCollection { values } => Some(values.gc_id),
+            JfrEvent::GCPhasePause { values } => Some(values.gc_id),
             JfrEvent::Unkown => None,
         }
     }

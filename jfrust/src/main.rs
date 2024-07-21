@@ -48,19 +48,16 @@ struct Candle {
     after_gc: u64,
     tenured: u64,
     gc_name: String,
+    gc_pause_name: String,
     tenuring_threshold: u64,
     collection_type: CollectionType,
 }
 impl Candle {
     fn title(&self) -> String {
         if let CollectionType::Unknown = self.collection_type {
-            String::from(self.gc_name.trim_start_matches("G1"))
+            self.gc_pause_name.clone()
         } else {
-            format!(
-                "{:?}{}",
-                self.collection_type,
-                self.gc_name.trim_start_matches("G1")
-            )
+            format!("{:?}", self.collection_type,)
         }
     }
 }
@@ -107,6 +104,7 @@ impl JfrMain {
                     }
                 },
                 JfrEvent::GarbageCollection { values } => candle.gc_name = values.name.clone(),
+                JfrEvent::GCPhasePause { values } => candle.gc_pause_name = values.name.clone(),
                 JfrEvent::YoungGarbageCollection { values } => {
                     candle.tenuring_threshold = values.tenuring_threshold
                 }
