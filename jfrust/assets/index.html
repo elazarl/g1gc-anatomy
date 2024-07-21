@@ -17,8 +17,7 @@
 let filter = document.getElementById("filter-checkbox");
 const graphdivs = document.getElementsByClassName('plotly-graph-div');
 filter.addEventListener('change', async e => {
-  let params = "?collection_type_filter=Unknown"+
-               "&collection_type_filter=Concurrent%20Start"+
+  let params = "?collection_type_filter=Concurrent%20Start"+
                "&collection_type_filter=Prepare%20Mixed"
   ;
   if (!e.target.checked)

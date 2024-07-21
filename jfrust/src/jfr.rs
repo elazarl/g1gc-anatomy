@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
+use iso8601::Duration;
 use serde::{Deserialize, Deserializer};
 
 /*
@@ -174,6 +173,77 @@ pub struct G1HeapSummary {
     pub survivor_used: u64,
 }
 /*
+{
+  "type": "jdk.OldGarbageCollection",
+  "values": {
+    "startTime": "2024-07-21T11:47:47.368046372+02:00",
+    "duration": "PT0.004563166S",
+    "gcId": 26
+  }
+}
+*/
+#[derive(Deserialize, Debug, Clone)]
+pub struct OldGarbageCollection {
+    #[serde(rename = "startTime", deserialize_with = "deser_ts_ms")]
+    pub start_time: DateTime<Utc>,
+    #[serde(deserialize_with = "deser_dur")]
+    pub duration: Duration,
+    #[serde(rename = "gcId")]
+    pub gc_id: u64,
+}
+/*
+{
+  "type": "jdk.YoungGarbageCollection",
+  "values": {
+    "startTime": "2024-07-21T11:47:47.097667330+02:00",
+    "duration": "PT0.027041417S",
+    "gcId": 1,
+    "tenuringThreshold": 1
+  }
+},
+*/
+#[derive(Deserialize, Debug, Clone)]
+pub struct YoungGarbageCollection {
+    #[serde(rename = "startTime", deserialize_with = "deser_ts_ms")]
+    pub start_time: DateTime<Utc>,
+    #[serde(deserialize_with = "deser_dur")]
+    pub duration: Duration,
+    #[serde(rename = "gcId")]
+    pub gc_id: u64,
+    #[serde(rename = "tenuringThreshold")]
+    pub tenuring_threshold: u64,
+}
+/*
+{
+  "type": "jdk.GarbageCollection",
+  "values": {
+    "startTime": "2024-07-21T11:47:47.368046372+02:00",
+    "duration": "PT0.004563166S",
+    "gcId": 26,
+    "name": "G1Old",
+    "cause": "G1 Evacuation Pause",
+    "sumOfPauses": "PT0.001634709S",
+    "longestPause": "PT0.001322542S"
+  }
+},
+*/
+#[derive(Deserialize, Debug, Clone)]
+pub struct GarbageCollection {
+    #[serde(rename = "startTime", deserialize_with = "deser_ts_ms")]
+    pub start_time: DateTime<Utc>,
+    #[serde(deserialize_with = "deser_dur")]
+    pub duration: Duration,
+    #[serde(rename = "gcId")]
+    pub gc_id: u64,
+    pub name: String,
+    pub cause: String,
+    #[serde(rename = "sumOfPauses", deserialize_with = "deser_dur")]
+    pub sum_of_pauses: Duration,
+    #[serde(rename = "longestPause", deserialize_with = "deser_dur")]
+    pub longest_pauses: Duration,
+}
+
+/*
 "type": "jdk.G1GarbageCollection",
 "values": {
   "startTime": "2024-07-05T13:49:17.514902791+03:00",
@@ -215,6 +285,12 @@ pub enum JfrEvent {
     G1HeapSummary { values: G1HeapSummary },
     #[serde(rename = "jdk.G1GarbageCollection")]
     G1GarbageCollection { values: G1GarbageCollection },
+    #[serde(rename = "jdk.GarbageCollection")]
+    GarbageCollection { values: GarbageCollection },
+    #[serde(rename = "jdk.OldGarbageCollection")]
+    OldGarbageCollection { values: OldGarbageCollection },
+    #[serde(rename = "jdk.YoungGarbageCollection")]
+    YoungGarbageCollection { values: YoungGarbageCollection },
     #[serde(rename = "jdk.PromoteObjectOutsidePLAB")]
     PromoteObjectOutsidePLAB { values: PromoteObjectOutsidePLAB },
     #[serde(rename = "jdk.PromoteObjectInNewPLAB")]
@@ -232,6 +308,9 @@ impl JfrEvent {
             JfrEvent::PromoteObjectOutsidePLAB { values } => Some(values.gc_id),
             JfrEvent::PromoteObjectInNewPLAB { values } => Some(values.gc_id),
             JfrEvent::G1GarbageCollection { values } => Some(values.gc_id),
+            JfrEvent::GarbageCollection { values } => Some(values.gc_id),
+            JfrEvent::OldGarbageCollection { values } => Some(values.gc_id),
+            JfrEvent::YoungGarbageCollection { values } => Some(values.gc_id),
             JfrEvent::Unkown => None,
         }
     }
@@ -248,10 +327,13 @@ where
 }
 
 #[allow(unused)]
-fn deser_dur_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+fn deser_dur<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let ms = u64::deserialize(deserializer)?; // Deserialize as i64
-    Ok(Duration::from_millis(ms))
+    let dur_str = String::deserialize(deserializer)?; // Deserialize as i64
+    let dur = dur_str
+        .parse::<Duration>()
+        .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+    Ok(dur)
 }

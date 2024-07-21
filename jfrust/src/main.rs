@@ -37,21 +37,37 @@ pub struct Graphs {
     gcs_ticks: Vec<f64>,
 }
 
+#[derive(Default, Clone)]
+struct Candle {
+    gc_id: u64,
+    before_gc: u64,
+    young_before: u64,
+    young_after: u64,
+    survivors_before: u64,
+    survivors_after: u64,
+    after_gc: u64,
+    tenured: u64,
+    gc_name: String,
+    tenuring_threshold: u64,
+    collection_type: CollectionType,
+}
+impl Candle {
+    fn title(&self) -> String {
+        if let CollectionType::Unknown = self.collection_type {
+            String::from(self.gc_name.trim_start_matches("G1"))
+        } else {
+            format!(
+                "{:?}{}",
+                self.collection_type,
+                self.gc_name.trim_start_matches("G1")
+            )
+        }
+    }
+}
+
 impl JfrMain {
     pub fn to_graphs(&self, collection_type_filter: HashSet<CollectionType>) -> Graphs {
         let mut graphs: Graphs = Default::default();
-        #[derive(Default, Clone)]
-        struct Candle {
-            gc_id: u64,
-            before_gc: u64,
-            young_before: u64,
-            young_after: u64,
-            survivors_before: u64,
-            survivors_after: u64,
-            after_gc: u64,
-            tenured: u64,
-            collection_type: CollectionType,
-        }
         let mut gc_id_to_candle: BTreeMap<u64, Candle> = BTreeMap::new();
         for evt in &self.recording.events {
             let gc_id = evt.gc_id();
@@ -90,6 +106,10 @@ impl JfrMain {
                         candle.after_gc = values.heap_used;
                     }
                 },
+                JfrEvent::GarbageCollection { values } => candle.gc_name = values.name.clone(),
+                JfrEvent::YoungGarbageCollection { values } => {
+                    candle.tenuring_threshold = values.tenuring_threshold
+                }
                 _ => {}
             }
         }
@@ -104,10 +124,6 @@ impl JfrMain {
             if gc_id == u64::MAX {
                 continue;
             }
-            println!(
-                "got {:?} filter {:?}",
-                candle.collection_type, collection_type_filter
-            );
             if collection_type_filter.contains(&candle.collection_type) {
                 continue;
             }
@@ -125,9 +141,7 @@ impl JfrMain {
             tenured.push(tenured_bytes);
             survivors.push(survivors_before);
             text_array.push(format!("[{}] before gc", gc_id));
-            graphs
-                .gcs_labels
-                .push(format!("{:?}", candle.collection_type));
+            graphs.gcs_labels.push(candle.title());
             graphs.gcs_ticks.push(gc_id_x_axis as f64);
 
             let gc_id_x_axis = ix as f64 * FACTOR + 1f64;
@@ -138,9 +152,7 @@ impl JfrMain {
             tenured.push(tenured_bytes);
             survivors.push(candle.survivors_after);
             text_array.push(format!("[{}] after gc", gc_id));
-            graphs
-                .gcs_labels
-                .push(format!("{:?}", candle.collection_type));
+            graphs.gcs_labels.push(candle.title());
             ix += 1;
         }
         graphs.gcs.push(
@@ -239,7 +251,6 @@ async fn ages(
             }
         })
         .collect();
-    println!("FILTER {:?}", filter);
     /*let filter: HashSet<CollectionType> = params
     .get_vec("collection_type_filter")
     .map(|e| serde_json::from_str::<CollectionType>(e).unwrap())
