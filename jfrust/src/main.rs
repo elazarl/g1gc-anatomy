@@ -23,6 +23,10 @@ struct Args {
     /// Name of the person to greet
     #[arg(short, long)]
     jfr_file: String,
+    #[arg(short, long, default_value = "localhost:3000")]
+    addr: String,
+    #[arg(short, long, default_value = "false")]
+    webbrowser: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -205,7 +209,14 @@ async fn main() {
         .route("/tex-svg.js", get(tex))
         .route("/favicon.ico", get(favicon))
         .with_state(jfr_evt);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("{}", args.addr))
+        .await
+        .unwrap();
+    println!("listening on {}", args.addr);
+    // we don't care if it fails
+    if args.webbrowser {
+        let _ = webbrowser::open(format!("http://{}", args.addr).as_str());
+    }
     axum::serve(listener, app).await.unwrap();
     println!("Hello, world!");
 }
