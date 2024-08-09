@@ -130,25 +130,42 @@ impl JfrMain {
             let gc_id_x_axis = ix as f64 * FACTOR;
             x_axis.push(gc_id_x_axis);
             heap.push(candle.before_gc - candle.young_before);
-            assert!(tenured_bytes <= candle.young_before + candle.survivors_before);
-            let young_before = candle.young_before.saturating_sub(tenured_bytes);
-            let survivors_before =
-                candle.survivors_before - tenured_bytes.saturating_sub(candle.young_before);
+            if tenured_bytes > candle.young_before + candle.survivors_before {
+                println!(
+                    "weird, we see {} tenure candidates but >{} tenured in gc {}",
+                    candle.young_before + candle.survivors_before,
+                    tenured_bytes,
+                    candle.gc_id
+                );
+                young.push(candle.young_before);
+                tenured.push(0);
+                survivors.push(candle.survivors_before);
+            } else {
+                let young_before = candle.young_before.saturating_sub(tenured_bytes);
+                let survivors_before =
+                    candle.survivors_before - tenured_bytes.saturating_sub(candle.young_before);
 
-            young.push(young_before);
-            tenured.push(tenured_bytes);
-            survivors.push(survivors_before);
+                young.push(young_before);
+                tenured.push(tenured_bytes);
+                survivors.push(survivors_before);
+            }
             text_array.push(format!("[{}] before gc", gc_id));
             graphs.gcs_labels.push(candle.title());
             graphs.gcs_ticks.push(gc_id_x_axis as f64);
 
             let gc_id_x_axis = ix as f64 * FACTOR + 1f64;
             x_axis.push(gc_id_x_axis);
-            assert!(candle.after_gc >= tenured_bytes);
-            heap.push(candle.after_gc - candle.young_after - tenured_bytes);
-            young.push(candle.young_after);
-            tenured.push(tenured_bytes);
-            survivors.push(candle.survivors_after);
+            if candle.after_gc < tenured_bytes {
+                heap.push(candle.after_gc - candle.young_after);
+                young.push(candle.young_after);
+                tenured.push(0);
+                survivors.push(candle.survivors_after);
+            } else {
+                heap.push(candle.after_gc - candle.young_after - tenured_bytes);
+                young.push(candle.young_after);
+                tenured.push(tenured_bytes);
+                survivors.push(candle.survivors_after);
+            }
             text_array.push(format!("[{}] after gc", gc_id));
             graphs.gcs_labels.push(candle.title());
             ix += 1;

@@ -64,6 +64,7 @@ public class ProvokeGC {
       provoke();
   }
 }
+
 ```
 
 Let's see how it works
@@ -102,3 +103,95 @@ We can see that indeed we have a large amount of object with `age == 1`:
 ```
 
 Let's write a class that generates old age with a certain size:
+
+```java
+import java.util.ArrayList;
+import java.util.Random;
+
+public class MakeOldgen {
+  static long MB = 1024 * 1024;
+
+  static class Eldery {
+    static int blockSize = 512;
+    public ArrayList<byte[]> oldgen;
+
+    public Eldery removeMb(int mb) {
+      long bytes = mb * MB;
+      Random rnd = new Random();
+      while (bytes > 0) {
+        int to_del = rnd.nextInt(oldgen.size());
+        oldgen.remove(to_del);
+        bytes -= blockSize;
+      }
+      return this;
+    }
+
+    public Eldery addMb(int mb) {
+      long bytes = mb * MB;
+      oldgen = new ArrayList<>();
+      while (bytes > 0) {
+        oldgen.add(new byte[blockSize]);
+        bytes -= blockSize;
+      }
+      return this;
+    }
+  }
+
+  public static void main(String[] args) {
+    int tenuring_off = 1;
+    if (args.length >= 1) {
+      tenuring_off = Integer.valueOf(args[0]);
+    }
+    Runtime rt = Runtime.getRuntime();
+    long baseline = rt.freeMemory();
+    int tenuring_thres = GetVmOptions.get("MaxTenuringThreshold");
+    System.out.println("Objs tenure after surviving " +
+        tenuring_thres +
+        " rounds of GC. Running " +
+        (tenuring_thres + tenuring_off) +
+        " rounds");
+    Eldery oldgen = makeOldgen(40);
+    System.out.println("Heap: Promoting 20MB oldgen");
+    for (int i = 0; i < tenuring_thres + tenuring_off; i++) {
+      ProvokeYoungGC.provoke();
+    }
+    System.out.println("Heap: Now running GC after promotion");
+    oldgen = null;
+    ProvokeYoungGC.provoke();
+    System.out.println("Heap: Now done");
+  }
+
+  public static Eldery makeOldgen(int mb) {
+    return new Eldery().addMb(mb);
+  }
+}
+```
+
+Now let's create the "sawtooth" pattern of GC, by removing old generation
+create some more, and then wait for the GC to remove a bite of the old
+generation all of a sudden.
+
+```java
+public class SawTooth {
+  static class Eldery {
+    public byte weight[] = new byte[512];
+    public Eldery next;
+  }
+
+  public static void main(String[] args) {
+    MakeOldgen.Eldery oldgen = MakeOldgen.makeOldgen(40);
+    int tenuring_thres = GetVmOptions.get("MaxTenuringThreshold");
+    for (int i = 0; i < tenuring_thres + 1; i++) {
+      ProvokeYoungGC.provoke();
+    }
+    for (int tooth = 10; tooth > 0; tooth--) {
+      oldgen.removeMb(20);
+      for (int i = 0; i < 8; i++)
+        ProvokeYoungGC.provoke();
+      oldgen.addMb(20);
+      ProvokeYoungGC.provoke();
+    }
+  }
+
+}
+```

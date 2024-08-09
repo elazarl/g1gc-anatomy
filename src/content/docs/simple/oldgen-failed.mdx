@@ -71,11 +71,38 @@ By default we need 15 rounds of GC until object is promoted to the eldery zone.
 Let's go ahead and promote some objects to be oldgen!
 
 ```java
+import java.util.ArrayList;
+import java.util.Random;
+
 public class MakeOldgen {
+  static long MB = 1024 * 1024;
+
   static class Eldery {
-    public byte weight[] = new byte[512];
-    public Eldery next;
+    static int blockSize = 512;
+    public ArrayList<byte[]> oldgen;
+
+    public Eldery removeMb(int mb) {
+      long bytes = mb * MB;
+      Random rnd = new Random();
+      while (bytes > 0) {
+        int to_del = rnd.nextInt(oldgen.size());
+        oldgen.remove(to_del);
+        bytes -= blockSize;
+      }
+      return this;
+    }
+
+    public Eldery addMb(int mb) {
+      long bytes = mb * MB;
+      oldgen = new ArrayList<>();
+      while (bytes > 0) {
+        oldgen.add(new byte[blockSize]);
+        bytes -= blockSize;
+      }
+      return this;
+    }
   }
+
   public static void main(String[] args) {
     int tenuring_off = 1;
     if (args.length >= 1) {
@@ -83,19 +110,15 @@ public class MakeOldgen {
     }
     Runtime rt = Runtime.getRuntime();
     long baseline = rt.freeMemory();
-    long MB = 1024*1024;
-    int tenuring_thres =
-       GetVmOptions.get("MaxTenuringThreshold");
+    int tenuring_thres = GetVmOptions.get("MaxTenuringThreshold");
     System.out.println("Objs tenure after surviving " +
-                      tenuring_thres +
-                      " rounds of GC. Running " +
-                      (tenuring_thres+tenuring_off) +
-                      " rounds");
+        tenuring_thres +
+        " rounds of GC. Running " +
+        (tenuring_thres + tenuring_off) +
+        " rounds");
     Eldery oldgen = makeOldgen(40);
     System.out.println("Heap: Promoting 20MB oldgen");
-    for (int i = 0;
-       i < tenuring_thres+tenuring_off;
-       i++) {
+    for (int i = 0; i < tenuring_thres + tenuring_off; i++) {
       ProvokeYoungGC.provoke();
     }
     System.out.println("Heap: Now running GC after promotion");
@@ -104,16 +127,8 @@ public class MakeOldgen {
     System.out.println("Heap: Now done");
   }
 
-  private static Eldery makeOldgen(int mb) {
-    Eldery oldgen = null;
-    // each Eldery object has 512 bytes, we'll allocate 2*1024
-    // of those to take up 1 MB
-    for (int i = 0; i < mb * 1024 * 2; i++) {
-      Eldery newold = new Eldery();
-      newold.next = oldgen;
-      oldgen = newold;
-    }
-    return oldgen;
+  public static Eldery makeOldgen(int mb) {
+    return new Eldery().addMb(mb);
   }
 }
 ```
